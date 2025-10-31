@@ -28,81 +28,73 @@ def find_col(df: pd.DataFrame, candidates):
     for cand in candidates:
         cand_norm = normalize_col_name(cand)
         if cand_norm in cols_norm:
-            return cols_norm[cand_norm]  # retorna nome exato do df
+            return cols_norm[cand_norm]
     return None
 
 def safe_series_str_normalize(s: pd.Series):
-    # garante que strings fiquem sem acento para comparações internas, sem perder conteúdo original
     return s.astype(str).map(lambda x: strip_accents(x).upper().strip())
 
 st.set_page_config(page_title="Painel de Vacinação", layout="wide")
 st.title("Painel Interativo de Vacinação")
 st.markdown("Visualize dados, tendências e previsões de vacinação de forma interativa e profissional.")
 
-# CSS para blocos de notícias
+# CSS customizado
 st.markdown("""
     <style>
-    h1, h2, h3 { color: #004d40; }
+    html, body, [class*="css"]  {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    h1, h2, h3 { color: #0b5a4a; }
     .news-block {
-        background-color: #f8f9fa;
-        border-left: 4px solid #004d40;
+        background-color: #f7faf9;
+        border-left: 4px solid #0b5a4a;
         padding: 10px 15px;
         border-radius: 6px;
         margin-bottom: 10px;
     }
+    .stHeader { padding-bottom: 8px; }
+    .main .block-container { padding-top: 1rem; padding-bottom: 2rem; }
     </style>
 """, unsafe_allow_html=True)
 
 @st.cache_data
-def load_data(file_path):
+def load_data(file_path: str):
     """
-    Tenta carregar via helper load_and_preprocess_data; caso falhe na decodificação,
-    faz fallback para diversas codificações e normaliza datas.
+    Tenta usar o helper load_and_preprocess_data; fallback a leitura direta com diferentes encodings.
+    Normaliza tipos e retorna (df, cols_detectadas).
     """
     try:
         df = load_and_preprocess_data(file_path)
     except Exception:
-        # fallback genérico
         try:
             df = pd.read_csv(file_path, encoding="utf-8")
         except Exception:
             df = pd.read_csv(file_path, encoding="latin-1", sep=None, engine="python")
 
-    # strip de nomes de colunas (mantemos os nomes originais mas removemos espaços extremos)
     df.columns = [c.strip() for c in df.columns]
 
-    # normalizar strings nas colunas object para evitar caracteres bizarros
     for c in df.select_dtypes(include=["object"]).columns:
         df[c] = df[c].astype(str).map(lambda x: x.strip())
 
-    # identificar colunas chave (aceita diversas grafias)
     col_data = find_col(df, ["Data da Vacinação", "Data da Vacinacao", "data_da_vacinacao", "data_vacinacao", "data"])
     col_sexo = find_col(df, ["Sexo", "sexo"])
     col_raca = find_col(df, ["Raça", "Raca", "raca"])
-    col_idade = find_col(df, ["Idade", "idade", "idade_anos"])
+    col_idade = find_col(df, ["Idade", "idade", "idade_anos", "idade_anos_int"])
     col_fab = find_col(df, ["Fabricante da Vacina", "Fabricante", "fabricante_da_vacina", "fabricante"])
 
-    # converter data se existir
     if col_data:
         df[col_data] = pd.to_datetime(df[col_data], errors="coerce")
-
-    # filtrar linhas inválidas
-    if col_data:
         df = df.dropna(subset=[col_data])
 
-    # segurança: manter colunas esperadas como strings/consistentes
     if col_sexo:
-        # normalizar valores de sexo (sem acento, uppercase)
-        df[col_sexo] = df[col_sexo].astype(str).map(lambda x: strip_accents(x).upper().strip())
+        df[col_sexo] = safe_series_str_normalize(df[col_sexo])
     if col_raca:
-        df[col_raca] = df[col_raca].astype(str).map(lambda x: strip_accents(x).upper().strip())
+        df[col_raca] = safe_series_str_normalize(df[col_raca])
     if col_fab:
         df[col_fab] = df[col_fab].astype(str).map(lambda x: x.strip())
     if col_idade:
-        # garantir numérico
         df[col_idade] = pd.to_numeric(df[col_idade], errors="coerce").fillna(0).astype(int)
 
-    # Retornar DataFrame e nomes das colunas detectadas para uso posterior
     return df, {
         "data": col_data,
         "sexo": col_sexo,
@@ -114,27 +106,23 @@ def load_data(file_path):
 FILE_PATH = "vacinados.csv"
 df, COLS = load_data(FILE_PATH)
 
-# validação rápida: se colunas essenciais não existirem, avisar o usuário
 essential = ["data", "sexo", "raca", "idade", "fabricante"]
 missing = [k for k in essential if COLS.get(k) is None]
 if missing:
-    st.error(f"Colunas essenciais não encontradas no arquivo: {missing}. Verifique nomes do CSV.")
+    st.error(f"Colunas essenciais não encontradas no arquivo: {missing}. Verifique os nomes do CSV.")
     st.stop()
 
-# atalhos para nomes reais
 COL_DATA = COLS["data"]
 COL_SEXO = COLS["sexo"]
 COL_RACA = COLS["raca"]
 COL_IDADE = COLS["idade"]
 COL_FAB = COLS["fabricante"]
 
-# garantir filtros preditivos/plotly: criar col com periodo mensal
 df["_mes_periodo"] = df[COL_DATA].dt.to_period("M")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total de registros", f"{len(df):,}".replace(",", "."))
 col2.metric("Idade média", round(df[COL_IDADE].mean(), 1))
-# fabricante e sexo podem ter valores NaN se coluna vazia; segurança:
 fab_mode = df[COL_FAB].mode().iloc[0] if not df[COL_FAB].mode().empty else "N/A"
 sexo_mode = df[COL_SEXO].mode().iloc[0] if not df[COL_SEXO].mode().empty else "N/A"
 col3.metric("Fabricante mais aplicado", fab_mode)
@@ -154,9 +142,8 @@ module = st.sidebar.radio(
 
 if module == "Visão Geral":
     st.header("Visão Geral dos Dados")
-    st.caption("Use os filtros para refinar a visualização e gerar insights em formato de notícias.")
+    st.caption("Use os filtros para refinar a visualização e explorar insights interativos.")
 
-    # filtros principais (usando nomes detectados)
     col1, col2 = st.columns(2)
     filtro_raca = col1.selectbox("Raça", ["Todas"] + sorted(df[COL_RACA].unique()))
     filtro_fab = col2.selectbox("Fabricante", ["Todos"] + sorted(df[COL_FAB].unique()))
@@ -164,168 +151,222 @@ if module == "Visão Geral":
     col3, col4, col5 = st.columns(3)
     filtro_sexo = col3.radio("Sexo", ["Todos"] + sorted(df[COL_SEXO].unique()))
     filtro_idade = col4.slider("Faixa etária", int(df[COL_IDADE].min()), int(df[COL_IDADE].max()), (0, 100))
-    # categoria é opcional — só usar se existir na base
+
+    data_min = df[COL_DATA].min()
+    data_max = df[COL_DATA].max()
+    filtro_periodo = col5.slider(
+        "Período de vacinação",
+        min_value=data_min.to_pydatetime(),
+        max_value=data_max.to_pydatetime(),
+        value=(data_min.to_pydatetime(), data_max.to_pydatetime()),
+        format="DD/MM/YYYY"
+    )
+
     categoria_col = find_col(df, ["Categoria", "categoria"])
     categorias = sorted(df[categoria_col].unique()) if categoria_col else []
-    filtro_categoria = col5.multiselect("Categoria", categorias) if categorias else []
+    filtro_categoria = st.multiselect("Categoria", categorias) if categorias else []
 
-    # aplicar filtros ao df_filtered
     df_filtered = df.copy()
-    if filtro_raca and filtro_raca != "Todas":
+    if filtro_raca != "Todas":
         df_filtered = df_filtered[df_filtered[COL_RACA] == filtro_raca]
-    if filtro_fab and filtro_fab != "Todos":
+    if filtro_fab != "Todos":
         df_filtered = df_filtered[df_filtered[COL_FAB] == filtro_fab]
-    if filtro_sexo and filtro_sexo != "Todos":
+    if filtro_sexo != "Todos":
         df_filtered = df_filtered[df_filtered[COL_SEXO] == filtro_sexo]
-    df_filtered = df_filtered[(df_filtered[COL_IDADE] >= filtro_idade[0]) & (df_filtered[COL_IDADE] <= filtro_idade[1])]
+    df_filtered = df_filtered[
+        (df_filtered[COL_IDADE] >= filtro_idade[0]) & (df_filtered[COL_IDADE] <= filtro_idade[1])
+    ]
     if filtro_categoria:
         df_filtered = df_filtered[df_filtered[categoria_col].isin(filtro_categoria)]
+    df_filtered = df_filtered[
+        (df_filtered[COL_DATA] >= filtro_periodo[0]) & (df_filtered[COL_DATA] <= filtro_periodo[1])
+    ]
 
     st.info(f"**{len(df_filtered)}** registros encontrados com os filtros aplicados.")
-    st.subheader("Tabela filtrada (Top 20)")
     st.dataframe(df_filtered.head(20), use_container_width=True)
-
-    # --- Notícias/insights baseados no df_filtered ---
-    st.markdown("---")
-    st.subheader("Notícias e insights gerados")
-
-    try:
-        # usar o df_filtered para gerar insights contextuais
-        if df_filtered.empty:
-            st.warning("Sem registros no conjunto filtrado para gerar insights.")
-        else:
-            per_min = df_filtered[COL_DATA].min().strftime("%d/%m/%Y")
-            per_max = df_filtered[COL_DATA].max().strftime("%d/%m/%Y")
-
-            # por sexo
-            fem_count = (df_filtered[COL_SEXO] == "FEMININO").sum()
-            masc_count = (df_filtered[COL_SEXO] == "MASCULINO").sum()
-            pct_fem = (fem_count / len(df_filtered) * 100) if len(df_filtered) else 0
-            pct_masc = (masc_count / len(df_filtered) * 100) if len(df_filtered) else 0
-
-            # fabricante e raça top (no conjunto filtrado)
-            fab_top_filt = df_filtered[COL_FAB].mode().iloc[0] if not df_filtered[COL_FAB].mode().empty else "N/A"
-            raca_top_filt = df_filtered[COL_RACA].mode().iloc[0] if not df_filtered[COL_RACA].mode().empty else "N/A"
-
-            idade_media_filt = round(df_filtered[COL_IDADE].mean(), 1)
-
-            # blocos de notícia (respeitando filtros)
-            st.markdown(f"""
-            <div class="news-block">
-                <strong>Período:</strong> Entre {per_min} e {per_max}, o fabricante mais aplicado no recorte atual foi <strong>{fab_top_filt}</strong>.
-            </div>
-            """, unsafe_allow_html=True)
-
-            st.markdown(f"""
-            <div class="news-block">
-                <strong>Distribuição por sexo:</strong> No recorte atual, mulheres corresponderam a <strong>{pct_fem:.1f}%</strong> e homens a <strong>{pct_masc:.1f}%</strong> dos registros.
-            </div>
-            """, unsafe_allow_html=True)
-
-            st.markdown(f"""
-            <div class="news-block">
-                <strong>Idade média:</strong> A idade média no recorte é de <strong>{idade_media_filt}</strong> anos; a raça com maior frequência foi <strong>{raca_top_filt}</strong>.
-            </div>
-            """, unsafe_allow_html=True)
-
-            # destaque temporal: período com maior número de vacinações (por mês) no recorte
-            try:
-                mensal = df_filtered.groupby(df_filtered[COL_DATA].dt.to_period("M")).size()
-                top_mes = mensal.idxmax().strftime("%Y-%m")
-                top_mes_val = int(mensal.max())
-                st.markdown(f"""
-                <div class="news-block">
-                    <strong>Momento de pico:</strong> O mês com maior número de vacinações no recorte foi <strong>{top_mes}</strong> com <strong>{top_mes_val}</strong> registros.
-                </div>
-                """, unsafe_allow_html=True)
-            except Exception:
-                # se não houver dados de data (já tratamos), apenas ignore
-                pass
-
-    except Exception as e:
-        st.warning("Não foi possível gerar insights automáticos. Erro: " + str(e))
 
 elif module == "Tendências e Histórico":
     st.header("Tendências e Histórico")
-    st.caption("Visualize distribuições e evolução temporal das vacinações.")
+    st.caption("Visualize distribuições e evolução temporal das vacinações, com insights detalhados.")
 
     col1, col2, col3 = st.columns(3)
     sexo_sel = col1.radio("Sexo", ["Todos"] + sorted(df[COL_SEXO].unique()))
     idade_sel = col2.slider("Faixa etária", int(df[COL_IDADE].min()), int(df[COL_IDADE].max()), (0, 100))
     raca_sel = col3.multiselect("Raça", sorted(df[COL_RACA].unique()), default=sorted(df[COL_RACA].unique()))
 
+    data_min = df[COL_DATA].min()
+    data_max = df[COL_DATA].max()
+    periodo_sel = st.slider(
+        "Período de vacinação",
+        min_value=data_min.to_pydatetime(),
+        max_value=data_max.to_pydatetime(),
+        value=(data_min.to_pydatetime(), data_max.to_pydatetime()),
+        format="DD/MM/YYYY"
+    )
+
     df_hist = df.copy()
     if sexo_sel != "Todos":
         df_hist = df_hist[df_hist[COL_SEXO] == sexo_sel]
     df_hist = df_hist[(df_hist[COL_IDADE] >= idade_sel[0]) & (df_hist[COL_IDADE] <= idade_sel[1])]
     df_hist = df_hist[df_hist[COL_RACA].isin(raca_sel)]
+    df_hist = df_hist[(df_hist[COL_DATA] >= periodo_sel[0]) & (df_hist[COL_DATA] <= periodo_sel[1])]
 
-    # Gráficos
     col1, col2 = st.columns(2)
     sexo_counts = df_hist[COL_SEXO].value_counts().reset_index()
     sexo_counts.columns = ['Sexo', 'Quantidade']
-    fig_sexo = px.bar(sexo_counts, x='Sexo', y='Quantidade', color='Sexo', title="Distribuição por Sexo",
-                      color_discrete_sequence=px.colors.qualitative.Safe)
+    fig_sexo = px.bar(sexo_counts, x='Sexo', y='Quantidade', color='Sexo', title="Distribuição por Sexo")
     if sexo_sel == "Todos":
         col1.plotly_chart(fig_sexo, use_container_width=True)
 
     raca_counts = df_hist[COL_RACA].value_counts().reset_index()
     raca_counts.columns = ['Raça', 'Quantidade']
-    fig_raca = px.pie(raca_counts, names='Raça', values='Quantidade', hole=0.3, title="Distribuição por Raça",
-                      color_discrete_sequence=px.colors.qualitative.Safe)
+    fig_raca = px.pie(raca_counts, names='Raça', values='Quantidade', hole=0.3, title="Distribuição por Raça")
     col2.plotly_chart(fig_raca, use_container_width=True)
 
     fab_counts = df_hist[COL_FAB].value_counts().reset_index()
     fab_counts.columns = ['Fabricante', 'Quantidade']
-    fig_fab = px.pie(fab_counts, names='Fabricante', values='Quantidade', hole=0.3, title="Distribuição por Fabricante",
-                     color_discrete_sequence=px.colors.qualitative.Safe)
+    fig_fab = px.pie(fab_counts, names='Fabricante', values='Quantidade', hole=0.3, title="Distribuição por Fabricante")
     st.plotly_chart(fig_fab, use_container_width=True)
 
-    # Vacinações por idade
     idade_hist = df_hist.groupby(COL_IDADE).size().reset_index(name='Quantidade')
     fig_idade = px.line(idade_hist, x=COL_IDADE, y='Quantidade', markers=True, title="Vacinações por Idade")
     st.plotly_chart(fig_idade, use_container_width=True)
 
-elif module == "Agrupamentos Inteligentes":
+    st.markdown("---")
+    st.subheader("Notícias e insights históricos")
+
+    if df_hist.empty:
+        st.warning("Sem registros no conjunto filtrado para gerar insights.")
+    else:
+        per_min = df_hist[COL_DATA].min().strftime("%d/%m/%Y")
+        per_max = df_hist[COL_DATA].max().strftime("%d/%m/%Y")
+
+        fem_count = (df_hist[COL_SEXO] == "FEMININO").sum()
+        masc_count = (df_hist[COL_SEXO] == "MASCULINO").sum()
+        pct_fem = (fem_count / len(df_hist) * 100) if len(df_hist) else 0.0
+        pct_masc = (masc_count / len(df_hist) * 100) if len(df_hist) else 0.0
+
+        fab_top_filt = df_hist[COL_FAB].mode().iloc[0] if not df_hist[COL_FAB].mode().empty else "N/A"
+        raca_top_filt = df_hist[COL_RACA].mode().iloc[0] if not df_hist[COL_RACA].mode().empty else "N/A"
+        idade_media_filt = round(df_hist[COL_IDADE].mean(), 1)
+
+        mensal = df_hist.groupby(df_hist[COL_DATA].dt.to_period("M")).size()
+        if not mensal.empty:
+            top_mes = mensal.idxmax().strftime("%Y-%m")
+            top_mes_val = int(mensal.max())
+        else:
+            top_mes, top_mes_val = "N/A", 0
+
+        with st.expander("Período analisado"):
+            st.markdown(f"""
+            <div class="news-block">
+                Entre <strong>{per_min}</strong> e <strong>{per_max}</strong>, o fabricante mais aplicado foi <strong>{fab_top_filt}</strong>.
+            </div>
+            """, unsafe_allow_html=True)
+
+            df_mensal = df_hist.groupby(df_hist[COL_DATA].dt.to_period("M")).size().reset_index(name="Vacinações")
+            period_col = df_mensal.columns[0]
+            df_mensal["Periodo"] = df_mensal[period_col].astype(str)
+            fig = px.line(df_mensal, x="Periodo", y="Vacinações", markers=True, title="Evolução das vacinações no período")
+            st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("Distribuição por sexo"):
+            st.markdown(f"""
+            <div class="news-block">
+                Mulheres: <strong>{pct_fem:.1f}%</strong>, Homens: <strong>{pct_masc:.1f}%</strong> dos registros filtrados.
+            </div>
+            """, unsafe_allow_html=True)
+
+            sexo_counts = df_hist[COL_SEXO].value_counts().reset_index()
+            sexo_counts.columns = ["Sexo", "Quantidade"]
+            fig = px.bar(sexo_counts, x="Sexo", y="Quantidade", color="Sexo", title="Distribuição por sexo")
+            st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("Faixa etária média"):
+            st.markdown(f"""
+            <div class="news-block">
+                Idade média: <strong>{idade_media_filt} anos</strong>. Raça predominante: <strong>{raca_top_filt}</strong>.
+            </div>
+            """, unsafe_allow_html=True)
+
+            idade_hist = df_hist.groupby(COL_IDADE).size().reset_index(name="Quantidade")
+            fig = px.histogram(idade_hist, x=COL_IDADE, y="Quantidade", nbins=20, title="Distribuição por faixa etária")
+            st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("Pico de vacinação"):
+            st.markdown(f"""
+            <div class="news-block">
+                O mês com mais vacinações foi <strong>{top_mes}</strong>, com <strong>{top_mes_val} registros</strong>.
+            </div>
+            """, unsafe_allow_html=True)
+
+            mensal_df = mensal.reset_index()
+            mensal_df.columns = ["Mês", "Quantidade"]
+            mensal_df["Mês"] = mensal_df["Mês"].astype(str)
+            fig = px.bar(mensal_df, x="Mês", y="Quantidade", title="Vacinações mensais")
+            st.plotly_chart(fig, use_container_width=True)
+
+if module == "Agrupamentos Inteligentes":
     st.header("Agrupamentos Inteligentes (K-Means)")
-    st.caption("Agrupe perfis semelhantes de vacinados. O agrupamento é automático e a qualidade é apresentada.")
+    st.markdown("""
+    <div class="news-block">
+        Nesta seção, aplicamos técnicas de aprendizado não supervisionado para **agrupar registros** com perfis semelhantes.
+        O método K-Means permite identificar padrões ocultos e gerar insights estratégicos.
+    </div>
+    """, unsafe_allow_html=True)
 
-    n_clusters = st.slider("Número de grupos", min_value=2, max_value=8, value=3)
+    numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+    if len(numeric_cols) < 2:
+        st.warning("É necessário pelo menos duas variáveis numéricas para realizar o agrupamento.")
+    else:
+        selected_vars = st.multiselect(
+            "Selecione as variáveis para agrupamento:",
+            numeric_cols,
+            default=numeric_cols[:3]
+        )
+        n_clusters = st.slider("Número de clusters:", 2, 10, 3)
 
-    # preparar dados: dummies para colunas categóricas principais
-    df_ml = df[[COL_IDADE, COL_SEXO, COL_RACA, COL_FAB]].copy()
-    # converter para versões sem acento/normalizadas onde faz sentido
-    df_ml[COL_SEXO] = df_ml[COL_SEXO].map(lambda x: strip_accents(x).upper())
-    df_ml[COL_RACA] = df_ml[COL_RACA].map(lambda x: strip_accents(x).upper())
-    df_ml = pd.get_dummies(df_ml, columns=[COL_SEXO, COL_RACA, COL_FAB], drop_first=True)
+        if st.button("Gerar Clusters"):
+            X = df[selected_vars].dropna()
+            if len(X) < n_clusters:
+                st.warning("O número de amostras é insuficiente para formar os clusters escolhidos.")
+            else:
+                kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                clusters = kmeans.fit_predict(X)
+                df['Cluster'] = clusters
 
-    X = df_ml.select_dtypes(include=np.number).fillna(0)
+                silhouette = silhouette_score(X, clusters)
+                st.markdown(f"""
+                <div class="news-block">
+                    <strong>Coeficiente de Silhueta:</strong> {silhouette:.3f}<br>
+                    Quanto mais próximo de 1, melhor a separação entre grupos.
+                </div>
+                """, unsafe_allow_html=True)
 
-    if st.button("Gerar agrupamento"):
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        clusters = kmeans.fit_predict(X)
-        score = silhouette_score(X, clusters) if len(X) > n_clusters else float("nan")
+                st.dataframe(df[['Cluster'] + selected_vars].head(10))
 
-        df_clustered = df.copy()
-        df_clustered["Grupo"] = clusters
-
-        st.success(f"Agrupamento realizado. Qualidade dos grupos (silhueta): {score:.3f}" if not np.isnan(score) else "Agrupamento realizado.")
-        profile = df_clustered.groupby("Grupo").agg(
-            Idade_Media=(COL_IDADE, "mean"),
-            Total=(COL_IDADE, "count")
-        ).round(2)
-        st.subheader("Resumo dos grupos")
-        st.dataframe(profile, use_container_width=True)
-
-        # PCA para visualização 2D
-        pca = PCA(n_components=2)
-        comp = pca.fit_transform(X)
-        df_clustered["Eixo_1"] = comp[:, 0]
-        df_clustered["Eixo_2"] = comp[:, 1]
-
-        fig = px.scatter(df_clustered, x="Eixo_1", y="Eixo_2", color=df_clustered["Grupo"].astype(str),
-                         title="Visualização 2D dos Grupos")
-        st.plotly_chart(fig, use_container_width=True)
+                if X.shape[0] > 1 and X.shape[1] > 1:
+                    n_components = min(2, X.shape[1])
+                    pca = PCA(n_components=n_components)
+                    try:
+                        comp = pca.fit_transform(X)
+                        df_plot = pd.DataFrame({
+                            'Componente 1': comp[:, 0],
+                            'Componente 2': comp[:, 1] if n_components > 1 else 0,
+                            'Cluster': clusters
+                        })
+                        fig_pca = px.scatter(
+                            df_plot,
+                            x='Componente 1',
+                            y='Componente 2',
+                            color='Cluster',
+                            title='Clusters de registros (PCA)'
+                        )
+                        st.plotly_chart(fig_pca, use_container_width=True)
+                    except ValueError as e:
+                        st.warning(f"PCA não pôde ser aplicado: {e}")
+                else:
+                    st.warning("Não há dados suficientes para aplicar o PCA.")
 
 elif module == "Projeções Futuras":
     st.header("Projeções Futuras de Vacinação")
@@ -339,9 +380,9 @@ elif module == "Projeções Futuras":
     if "Todos" not in sexo_proj:
         df_pred = df_pred[df_pred[COL_SEXO].isin(sexo_proj)]
 
-    # agrupar por mês (período)
     df_mes = df_pred.groupby(df_pred[COL_DATA].dt.to_period("M")).size().reset_index(name="Vacinações")
-    df_mes[COL_DATA] = df_mes[df_mes.columns[0]]  # usar a coluna período como referência
+    period_col = df_mes.columns[0]
+    df_mes["Periodo"] = df_mes[period_col].astype(str)
     df_mes["Indice"] = np.arange(len(df_mes))
 
     X = df_mes[["Indice"]]
@@ -356,11 +397,11 @@ elif module == "Projeções Futuras":
         X_future = np.arange(len(X), len(X) + horizonte).reshape(-1, 1)
         y_future = modelo.predict(X_future)
 
-        futuras_datas = pd.period_range(df_mes[COL_DATA].iloc[-1] + 1, periods=horizonte, freq="M")
+        futuras_datas = pd.period_range(df_mes[period_col].iloc[-1] + 1, periods=horizonte, freq="M")
         df_proj = pd.DataFrame({"Mês": futuras_datas.astype(str), "Vacinações Previstas": y_future})
 
         df_real = pd.DataFrame({
-            "Mês": df_mes[COL_DATA].astype(str),
+            "Mês": df_mes["Periodo"],
             "Vacinações": df_mes["Vacinações"]
         })
 
@@ -372,5 +413,73 @@ elif module == "Projeções Futuras":
         fig = px.line(df_all, x="Mês", y="Valor", color="Tipo", markers=True, title="Real vs Previsto")
         st.plotly_chart(fig, use_container_width=True)
 
-        tendencia_text = "Crescimento" if y_future[-1] > y.iloc[-1] else "Queda"
-        st.metric("Tendência atual", tendencia_text)
+        tendencia = "aumento" if y_future[-1] > y.iloc[-1] else "queda"
+        st.markdown(f"""
+        <div class="news-block">
+            <strong>Tendência:</strong> projeção indica <strong>{tendencia}</strong> nas vacinações nos próximos {horizonte} meses.
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("---")
+        st.subheader("Projeção por Sexo")
+
+        sexos_disponiveis = df[COL_SEXO].dropna().unique()
+        proj_por_sexo = []
+
+        for sexo in sexos_disponiveis:
+            df_sexo = df_pred[df_pred[COL_SEXO] == sexo]
+            df_mes_sexo = df_sexo.groupby(df_sexo[COL_DATA].dt.to_period("M")).size().reset_index(name="Vacinações")
+            df_mes_sexo["Indice"] = np.arange(len(df_mes_sexo))
+
+            if len(df_mes_sexo) >= 2:
+                Xs = df_mes_sexo[["Indice"]]
+                ys = df_mes_sexo["Vacinações"]
+                modelo_s = LinearRegression().fit(Xs, ys)
+
+                Xs_future = np.arange(len(Xs), len(Xs) + horizonte).reshape(-1, 1)
+                ys_future = modelo_s.predict(Xs_future)
+
+                futuras_datas_s = pd.period_range(df_mes_sexo.iloc[-1, 0] + 1, periods=horizonte, freq="M")
+                df_proj_s = pd.DataFrame({
+                    "Mês": futuras_datas_s.astype(str),
+                    "Vacinações Previstas": ys_future,
+                    "Sexo": sexo
+                })
+
+                df_real_s = pd.DataFrame({
+                    "Mês": df_mes_sexo.iloc[:, 0].astype(str),
+                    "Vacinações": ys,
+                    "Sexo": sexo
+                })
+
+                df_comb = pd.concat([
+                    df_real_s.assign(Tipo="Real", Valor=df_real_s["Vacinações"]),
+                    df_proj_s.assign(Tipo="Previsto", Valor=df_proj_s["Vacinações Previstas"])
+                ], ignore_index=True)
+
+                proj_por_sexo.append(df_comb)
+
+        if proj_por_sexo:
+            df_total_proj = pd.concat(proj_por_sexo, ignore_index=True)
+            fig_sexo_proj = px.line(
+                df_total_proj,
+                x="Mês",
+                y="Valor",
+                color="Sexo",
+                line_dash="Tipo",
+                markers=True,
+                title="Projeção de vacinações futuras por sexo"
+            )
+            st.plotly_chart(fig_sexo_proj, use_container_width=True)
+
+            ultimos = df_total_proj[df_total_proj["Tipo"] == "Previsto"].groupby("Sexo")["Valor"].sum()
+            if len(ultimos) >= 1:
+                sexo_destaque = ultimos.idxmax()
+                st.markdown(f"""
+                <div class="news-block">
+                    Projeções indicam que <strong>{sexo_destaque}</strong> deverá apresentar maior volume de vacinações
+                    nos próximos <strong>{horizonte} meses</strong>.
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.warning("Dados insuficientes para calcular projeção por sexo.")
