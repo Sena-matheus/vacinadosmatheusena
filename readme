@@ -1,0 +1,28 @@
+# Painel Interativo de Vacinação
+
+Um painel interativo desenvolvido em **Streamlit** para explorar, analisar e projetar dados de vacinação de forma visual, prática e inteligente.
+
+## Funcionalidades
+
+O painel é dividido em quatro seções principais:
+
+### 1. Visão Geral
+- Permite aplicar filtros interativos (sexo, faixa etária, raça, fabricante e período).  
+- Exibe métricas resumidas e a tabela dos registros filtrados.
+
+### 2. Tendências e Histórico
+- Analisa a distribuição de vacinações por sexo, raça e fabricante.  
+- Permite selecionar um **período de tempo específico**.  
+- Mostra gráficos de evolução e insights automáticos sobre os dados históricos.
+
+### 3. Agrupamentos Inteligentes
+- Utiliza o algoritmo **K-Means** para identificar padrões e segmentações nos dados.  
+- Calcula o **coeficiente de silhueta** para avaliar a qualidade dos agrupamentos.  
+- Exibe um gráfico interativo dos clusters com redução de dimensionalidade via **PCA**.
+
+### 4. Projeções Futuras
+- Aplica **Regressão Linear** para prever volumes de vacinação nos próximos meses.  
+- Gera gráficos comparando dados reais e previstos.  
+- Inclui uma **projeção detalhada por sexo**, com destaque para o grupo com maior tendência de vacinação.
+
+
